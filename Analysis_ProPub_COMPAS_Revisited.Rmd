@@ -1,0 +1,1969 @@
+---
+title: "ProPublica's COMPAS Data Revisited"
+author: "Matias Barenstein"
+date: "July 08, 2019"
+output:
+  html_document:
+    number_sections: true
+    fig_caption: true
+    keep_md: true
+header-includes:
+- \hypersetup{colorlinks,linkcolor={blue},citecolor={blue},urlcolor={blue}}
+---
+\
+This program reproduces all the Figures and Tables in my July 8, 2019, **arXiv** paper <https://arxiv.org/abs/1906.04711>. 
+\
+<!-- I use R Markdown, which is a file format for making documents with the R programming language.
+I keep this analysis program as an Rmarkdown program instead of an R script since it makes use of the kable 
+table function, which is suited for Rmarkdown files. (I also used Rmarkdown to write my arXiv paper) -->
+\
+```{r global_options, echo=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, fig.align = 'center', fig.pos = 'H')
+options(knitr.table.format = "html")
+```
+
+```{r setup, include=FALSE}
+
+# Loading R libraries
+# If you are running this yourself, you have to make sure you have these R packages already installed
+
+library(dplyr)  
+# library(ggplot2)  
+# Not necessary to load ggplot2 library directly when load ggfortify
+# but still must have the ggplot2 package installed
+library(ggfortify)
+library(grid)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library(tidyr)  
+library(lattice)
+library(caret)
+library(survival)
+library(pROC)
+
+# I also call a function later on from the lubridate package
+
+# This cleans out the workspace
+
+rm(list = ls())
+
+```
+
+# Introduction
+
+# Data
+
+Below I read datasets from ProPublica's COMPAS GitHub page (see below).
+Last accessed on August 11, 2019.
+
+In particular, the following two datasets:
+
+- **compas-scores.csv**
+
+- **compas-scores-two-years.csv**
+
+```{r}
+
+#############################
+
+# ProPublica 'full' dataset (my terminology) 
+
+#############################
+
+# Reading in ProPublica's full dataset
+
+df_full_entire <- read.csv('https://raw.githubusercontent.com/propublica/compas-analysis/master/compas-scores.csv', as.is = TRUE)
+
+length_full_data <- length(unique(df_full_entire$id))
+
+# This dataset contains the full sample of PRETRIAL defendants collected by ProPublica
+
+# Checking if unique people [this check/code is commented out, but could be run]
+
+# nrow(df_full_entire)
+# length(unique(df_full_entire$id))
+
+# # There are 11757 unique person id numbers
+# # Almost all of these appear to be distinct people
+# # Since when I check for unique combinations of last name, first name, and date of birth
+# # I find there are 11754 unique combinations
+# df_full_entire$name_dob <- paste(df_full_entire$name, df_full_entire$dob)
+# length(unique(df_full_entire$name_dob))
+
+#############################
+
+# Two sub-setting drops implemented by ProPublica on the full data
+
+# [This is explored further in Appendix later on]
+
+# When creating the two-year general recidivism dataset, ProPublica reduced the full sample
+# by implementing the two-year cutoff (at least for non-recidivists)
+# There are two additional reasons, briefly discussed here, why some people get dropped by ProPublica
+
+# Starting from the full data 
+# for some reason, ProPublica dropped the last 756 person ids 
+# when constructing the two-year datasets
+# starting from person id 11002 to 11757 in the full dataset 
+# It is not clear why these people were dropped 
+# but I also drop them from my two-year dataset 
+# to make it more comparable to ProPublica's two-year data
+
+df_full <- df_full_entire[which(df_full_entire$id<11002),]
+
+# Additionally, of the remaining 11001 people
+# ProPublica dropped 670 people who did not appear to have good data
+# because ProPublica could not find case/arrest information on these people
+# ProPublica tagged these with "is_recid" = -1 in their full dataset
+# I also drop these 670 people from the full dataset
+# to make it more comparable to ProPublica's two-year data
+
+df_full <- df_full[which(df_full$is_recid!=-1),]
+
+length_full_data_trimmed <- length(unique(df_full$id))
+
+# Thus we end up with 10331 people total in the trimmed full dataset
+# 11757 - 756 - 670 = 10331
+
+#############################
+
+# Two-year general recidivism dataset created by ProPublica
+
+#############################
+
+# Reading in ProPublica's two-year general recidivism dataset
+
+df_propub_2_yr_csv <- read.csv('https://raw.githubusercontent.com/propublica/compas-analysis/master/compas-scores-two-years.csv', as.is = TRUE)
+
+length_ProPub_2yr_data <- length(unique(df_propub_2_yr_csv$id))
+# 7214 records
+
+# Checking if unique people [this check/code is commented out, but could be run]
+
+# nrow(df_propub_2_yr_csv)
+# length(unique(df_propub_2_yr_csv$id))
+
+# # Or if we check for unique combinations of last name, first name, and date of birth
+# df_propub_2_yr_csv$name_dob <- paste(df_propub_2_yr_csv$name, df_propub_2_yr_csv$dob)
+# length(unique(df_propub_2_yr_csv$name_dob))
+
+# # All of these appear to be unique people
+
+```
+
+# ProPublica's Data Processing Mistake 
+
+```{r Figures-start, fig.align='center', fig.cap='Figure 1: Persons by COMPAS Screen Date (7-day bins) - ProPublica Full Dataset'}
+
+# I add Figure and Table numbers manually to captions, to match figure numbers automatically created in pdf version
+# (I could use bookdown package instead, but bookdown has chapter number prefix in html version
+# so it would not match continuous numbering in pdf version)
+
+# I use 7-day (i.e. weekly) bins
+
+# In the figures below the x=as.Date("2014-09-01") is not an important date
+# I just use this date for the legend positioning in the plot area
+
+#############
+
+# COMPAS-screen-date-figure-full-data
+
+# ProPublica full dataset - 10331 total
+# [Full minus last 756 people and 670 is_recid=-1]
+
+gg_full <- ggplot(df_full, aes(as.Date(compas_screening_date))) +
+  geom_histogram(binwidth=7) + geom_vline(xintercept = as.Date("2014-04-02"), col = "red") +
+  labs(title="Persons by COMPAS Screen Date",
+       subtitle=paste0("ProPublica Full Dataset  [N = ", nrow(df_full), "]"),
+       x="COMPAS Screening Date", y = "Person Count (7-day bins)") +
+  xlim(as.Date("2013-01-01"),as.Date("2015-01-01")) + 
+  geom_text(aes(x=as.Date("2014-09-01"), label="Post 04/01/2014", y=170), colour="red", angle=0) +
+  ylim(0,180) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+
+gg_full
+
+```
+
+```{r, fig.align='center', fig.cap='Figure 2: Persons by COMPAS Screen Date (7-day bins) - ProPublica Two-Year Dataset'}
+
+# COMPAS-screen-date-figure-ProPub-two-year-data
+
+# ProPublica two-year general recidivism dataset - 7214 total
+
+gg_2_yr <- ggplot(df_propub_2_yr_csv, aes(as.Date(compas_screening_date))) +
+  geom_histogram(binwidth=7) + geom_vline(xintercept = as.Date("2014-04-02"), col = "red") +
+  labs(title="Persons by COMPAS Screen Date",
+       subtitle=paste0("ProPublica Two-Year Dataset  [N = ", nrow(df_propub_2_yr_csv), "]"),
+       x="COMPAS Screening Date", y = "Person Count (7-day bins)") +
+  xlim(as.Date("2013-01-01"),as.Date("2015-01-01")) + 
+  geom_text(aes(x=as.Date("2014-09-01"), label="Post 04/01/2014", y=170), colour="red", angle=0) + 
+  ylim(0,180) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+
+gg_2_yr
+
+```
+
+```{r, fig.height=3.5, fig.align='center', fig.cap='Figure 3: Persons by COMPAS Screen Date (7-day bins) by Recidivism Status - ProPublica Full Dataset'}
+
+# COMPAS-screen-date-figures-by-recid-full-data
+
+# ProPublica full dataset - 10331 total
+# [Full minus last 756 people and 670 is_recid=-1]
+
+# is_redic==1
+
+gg_full_recid <- ggplot(df_full[which(df_full$is_recid==1),], aes(as.Date(compas_screening_date))) +
+  geom_histogram(binwidth=7) + geom_vline(xintercept = as.Date("2014-04-02"), col = "red") +
+  labs(subtitle=paste0("Recidivists [N = ", 
+                       nrow(df_full[which(df_full$is_recid==1),]), "]"),
+       x="COMPAS Screening Date", y = "Person Count (7-day bins)") +
+  xlim(as.Date("2013-01-01"),as.Date("2015-01-01")) + ylim(0,150) +
+  geom_text(aes(x=as.Date("2014-07-01"), label="Post 04/01/2014", y=140), colour="red", angle=0) 
+
+# is_redic==0
+
+gg_full_non_recid <- ggplot(df_full[which(df_full$is_recid==0),], aes(as.Date(compas_screening_date))) +
+  geom_histogram(binwidth=7) + geom_vline(xintercept = as.Date("2014-04-02"), col = "red") +
+  labs(subtitle=paste0("NON-Recidivists [N = ", 
+                       nrow(df_full[which(df_full$is_recid==0),]), "]"),
+       x="COMPAS Screening Date", y = "Person Count (7-day bins)") +
+  xlim(as.Date("2013-01-01"),as.Date("2015-01-01")) + ylim(0,150) +
+  geom_text(aes(x=as.Date("2014-07-01"), label="Post 04/01/2014", y=140), colour="red", angle=0) 
+
+# Combining both graphs
+
+screen_date_ProPub_Full_2 <- 
+  grid.arrange(gg_full_recid, gg_full_non_recid,  ncol = 2,
+               top = textGrob("Persons by COMPAS Screen Date by Recidivism Status \n [ProPublica Full Dataset]", 
+                              gp=gpar(fontsize=12, font=2)))
+
+
+```
+
+```{r, fig.height=3.5, fig.align='center', fig.cap='Figure 4: Persons by COMPAS Screen Date (7-day bins) by Recidivism Status - ProPublica Two-Year Dataset'}
+
+# COMPAS-screen-date-figures-by-recid-ProPub-two-year-data
+
+# ProPublica two-year general recidivism dataset - 7214 total
+
+# For comparison purposes to full data figures just shown
+# I also do these Figures for is_recid here (instead of two_year_recid)
+
+# is_redic==1
+
+gg_2_yr_recid <- ggplot(df_propub_2_yr_csv[which(df_propub_2_yr_csv$is_recid==1),], 
+                        aes(as.Date(compas_screening_date))) +
+  geom_histogram(binwidth=7) + geom_vline(xintercept = as.Date("2014-04-02"), col = "red") +
+  labs(subtitle=paste0("Recidivists [N = ", 
+                       nrow(df_propub_2_yr_csv[which(df_propub_2_yr_csv$is_recid==1),]), "]"),
+       x="COMPAS Screening Date", y = "Person Count (7-day bins)") +
+  xlim(as.Date("2013-01-01"),as.Date("2015-01-01")) + ylim(0,150) + 
+  geom_text(aes(x=as.Date("2014-07-01"), label="Post 04/01/2014", y=140), colour="red", angle=0) 
+
+# is_redic==0
+
+gg_2_yr_non_recid <- ggplot(df_propub_2_yr_csv[which(df_propub_2_yr_csv$is_recid==0),], 
+                            aes(as.Date(compas_screening_date))) +
+  geom_histogram(binwidth=7) + geom_vline(xintercept = as.Date("2014-04-02"), col = "red") +
+  labs(subtitle=paste0("NON-Recidivists [N = ", 
+                       nrow(df_propub_2_yr_csv[which(df_propub_2_yr_csv$is_recid==0),]), "]"),
+       x="COMPAS Screening Date", y = "Person Count (7-day bins)") +
+  xlim(as.Date("2013-01-01"),as.Date("2015-01-01")) + ylim(0,150) + 
+  geom_text(aes(x=as.Date("2014-07-01"), label="Post 04/01/2014", y=140), colour="red", angle=0) 
+
+# Combining both graphs
+
+screen_date_ProPub_2yr_3 <- 
+  grid.arrange(gg_2_yr_recid, gg_2_yr_non_recid,  ncol = 2,
+               top = textGrob("Persons by COMPAS Screen Date by Recidivism Status \n [ProPublica Two-Year Dataset]", 
+                              gp=gpar(fontsize=12, font=2)))
+
+```
+
+```{r Tables-start}
+
+# Recidivists-full-vs-ProPub-two-year-data
+
+# Any Recidivism - Full Dataset
+
+# 'Any' recidivism (my terminology) includes people who recividated 
+# more than two years after their COMPAS screen date
+# People in ProPublica's data can be observed for up to three years and three months
+# i.e. from January 1, 2013 through March 31, 2016
+
+any_recid_full_data_tab <- addmargins(xtabs(~ is_recid, data=df_full))
+
+row.names(any_recid_full_data_tab)[row.names(any_recid_full_data_tab)=="Sum"] <- "Total"
+
+# Any Recidivism - ProPublica Two-Year Dataset
+
+any_recid_ProPub_2yr_data_tab <- addmargins(xtabs(~ is_recid, data=df_propub_2_yr_csv))
+
+row.names(any_recid_ProPub_2yr_data_tab)[row.names(any_recid_ProPub_2yr_data_tab)=="Sum"] <- "Total"
+
+# Combining results
+
+combo_single_tab_is_recid <- cbind(any_recid_full_data_tab, any_recid_ProPub_2yr_data_tab)
+
+colnames(combo_single_tab_is_recid)[colnames(combo_single_tab_is_recid)=="any_recid_full_data_tab"] <- "ProPublica Full Data"
+colnames(combo_single_tab_is_recid)[colnames(combo_single_tab_is_recid)=="any_recid_ProPub_2yr_data_tab"] <- "ProPublica 2-Yr Data"
+
+kable(combo_single_tab_is_recid, 
+      caption = 'Table 1: Any Recidivism - ProPublica Full Dataset vs. ProPublica Two-Year Dataset', booktabs = TRUE) %>%
+  kable_styling()  %>%
+  row_spec(2, hline_after = T)
+
+# # There are only 2 people with is_recid=1 in the full dataset who are not in the two-year dataset
+# # i.e. 3473 vs 3471 
+
+```
+
+```{r Table-pre-vs-post-April-2014}
+
+# # April 1, 2014
+# as.Date(16161, origin="1970-01-01")
+# [1970-01-01 is R's internal date origin]
+
+df_propub_2_yr_csv$compas_date_numeric <- as.numeric(as.Date(df_propub_2_yr_csv$compas_screening_date))
+
+df_propub_2_yr_csv$post_april_2014 <- ifelse(df_propub_2_yr_csv$compas_date_numeric > 16161, 1, 0)
+
+# Any Recidivism by Pre-Post April 1 2014 COMPAS screen date - ProPublica Two-Year Dataset
+
+is_recid_x_post_april_tab <- addmargins(xtabs(~ is_recid + post_april_2014, data=df_propub_2_yr_csv))
+
+row.names(is_recid_x_post_april_tab)[row.names(is_recid_x_post_april_tab)=="Sum"] <- "Total"
+colnames(is_recid_x_post_april_tab)[colnames(is_recid_x_post_april_tab)=="Sum"] <- "Total"
+
+kable(is_recid_x_post_april_tab,  
+      caption = "Table 2: Any Recidivism by Pre-Post April 1 2014 COMPAS screen date - ProPublica Two-Year Dataset", 
+      booktabs = T) %>% 
+  kable_styling()  %>%
+  row_spec(2, hline_after = T) %>% 
+  column_spec(2, border_left = T) %>% 
+  column_spec(4, border_left = T) %>% 
+  add_header_above(c(is_recid = 1, post_april_2014 = 2, " " = 1), line = FALSE) 
+
+```
+
+```{r Figure-corrected-data, fig.height=3.5, fig.cap='Figure 5: Persons by COMPAS Screen Date (7-day bins) by Recidivism Status - Corrected Two-Year Dataset'}
+
+# Corrected two-year general recidivism dataset - 6216 total
+
+# 7214 goes down to 6216
+# 998 recidivists are dropped
+# This is the reduction in sample size when I implement the 4/1/2014 COMPAS screen date cutoff
+
+corrected_compas_two_year <- df_propub_2_yr_csv[which(df_propub_2_yr_csv$post_april_2014==0),]
+
+# # Could write permanent corrected two-year general recidivism file
+# write.csv(corrected_compas_two_year, file = "CORRECTED_compas_two_year.csv")
+
+#############
+
+# COMPAS-screen-date-figures-by-recid-corrected-two-year-cutoff
+
+# For comparison purposes to figures shown above
+# I also do these Figures for is_recid here (instead of two_year_recid)
+
+# is_redic==1
+
+gg_2_yr_corrected_recid <-
+  ggplot(corrected_compas_two_year[which(corrected_compas_two_year$is_recid==1),], 
+         aes(as.Date(compas_screening_date))) +
+  geom_histogram(binwidth=7) + geom_vline(xintercept = as.Date("2014-04-02"), col = "red") +
+  labs(subtitle=paste0("Recidivists [N = ", 
+                       nrow(corrected_compas_two_year[which(corrected_compas_two_year$is_recid==1),]), "]"),
+       x="COMPAS Screening Date", y = "Person Count (7-day bins)") +
+  xlim(as.Date("2013-01-01"),as.Date("2015-01-01")) + ylim(0,150) + 
+  geom_text(aes(x=as.Date("2014-07-01"), label="Post 04/01/2014", y=140), colour="red", angle=0) 
+
+# is_redic==0
+
+gg_2_yr_corrected_non_recid <- 
+  ggplot(corrected_compas_two_year[which(corrected_compas_two_year$is_recid==0),], 
+         aes(as.Date(compas_screening_date))) +
+  geom_histogram(binwidth=7) + geom_vline(xintercept = as.Date("2014-04-02"), col = "red") +
+  labs(subtitle=paste0("NON-Recidivists [N = ", 
+                       nrow(corrected_compas_two_year[which(
+                         corrected_compas_two_year$is_recid==0),]), "]"),
+       x="COMPAS Screening Date", y = "Person Count (7-day bins)") +
+  xlim(as.Date("2013-01-01"),as.Date("2015-01-01")) + ylim(0,150) + 
+  geom_text(aes(x=as.Date("2014-07-01"), label="Post 04/01/2014", y=140), colour="red", angle=0) 
+
+# Combining both graphs
+
+screen_date_Correct_2yr_4 <- 
+  grid.arrange(gg_2_yr_corrected_recid, gg_2_yr_corrected_non_recid,  ncol = 2,
+               top = textGrob("Persons by COMPAS Screen Date by Recidivism Status \n [Corrected Two-Year Dataset]", 
+                              gp=gpar(fontsize=12, font=2)))
+
+```
+
+# Recidivism Rates 
+
+```{r}
+
+# Any vs. Two-Year Recidivism - ProPublica Two-Year Dataset
+
+# ProPublica two-year general recidivism dataset - 7214 total 
+
+is_recid_x_two_year_ProPub <- addmargins(xtabs(~ is_recid + two_year_recid, data=df_propub_2_yr_csv), 2)
+
+colnames(is_recid_x_two_year_ProPub)[colnames(is_recid_x_two_year_ProPub)=="Sum"] <- "Total"
+
+kable(is_recid_x_two_year_ProPub,  
+      caption = "Table 3: Any vs. Two-Year Recidivism - ProPublica Two-Year Dataset", 
+      booktabs = T) %>% 
+  kable_styling()  %>%
+  column_spec(2, border_left = T) %>% 
+  column_spec(4, border_left = T) %>% 
+  add_header_above(c(is_recid = 1, two_year_recid = 2, " " = 1), line = FALSE) 
+
+# There are 220 more is_recid than two_year_recid 
+# These are people who recidivated more than two years after original COMPAS screen date
+
+# # Here would see that all 220 have post_april_2014 = 0
+# table(df_propub_2_yr_csv$post_april_2014[which(df_propub_2_yr_csv$is_recid==1 & 
+#                                                df_propub_2_yr_csv$two_year_recid==0)])
+
+```
+
+``` {r}
+
+# Two-Year Recidivism Rate - ProPublica Two-Year Dataset
+
+# ProPublica two-year general recidivism dataset - 7214 total
+
+ProPub_2_yr_recid_table <- xtabs(~ two_year_recid, data=df_propub_2_yr_csv)
+
+ProPub_2_yr_recid_rate_table <- prop.table(xtabs(~ two_year_recid, data=df_propub_2_yr_csv)) %>% round(3)
+
+ProPub_2_yr_recid_rate_fin_table <- 
+  cbind(ProPub_2_yr_recid_table, ProPub_2_yr_recid_rate_table)
+
+kable(ProPub_2_yr_recid_rate_fin_table,  escape = F, 
+      caption = "Table 4: Two-Year Recidivism Rate - ProPublica Two-Year Dataset", 
+      booktabs = T,
+      col.names = linebreak(c("N","Rate"))) %>%
+  kable_styling()  %>%
+  column_spec(2, border_left = T) %>%
+  add_header_above(c("two_year_recid" = 1, "Two-Year Recidivism" = 2), line = FALSE) 
+
+```
+
+``` {r}
+
+# Two-Year Recidivism vs. Pre-Post April 1 2014 COMPAS screen date - Two-Year Data
+
+two_yr_recid_x_post_april_tab <- addmargins(xtabs(~ two_year_recid + 
+                                                    post_april_2014, data=df_propub_2_yr_csv))
+
+row.names(two_yr_recid_x_post_april_tab)[row.names(two_yr_recid_x_post_april_tab)=="Sum"] <- "Total"
+colnames(two_yr_recid_x_post_april_tab)[colnames(two_yr_recid_x_post_april_tab)=="Sum"] <- "Total"
+
+kable(two_yr_recid_x_post_april_tab,  
+      caption = "Table 5: Two-Year Recidivism vs. Pre-Post April 1 2014 COMPAS screen date - Two-Year Data", 
+      booktabs = T) %>% 
+  kable_styling()  %>%
+  row_spec(2, hline_after = T) %>% 
+  column_spec(2, border_left = T) %>% 
+  column_spec(4, border_left = T) %>% 
+  add_header_above(c(two_year_recid = 1, post_april_2014 = 2, " " = 1), line = FALSE)
+
+two_yr_recid_x_post_april_tab <- NULL
+
+# We see that ProPublica kept recidivists (but did not keep non-recidivists) with COMPAS screen dates post 4/1/14
+# So all observations post 4/1/2014 in the two-year dataset(s) created by ProPublica are recidivists
+
+```
+
+``` {r}
+
+# Same as previous table, but in percents here (i.e. rate)
+
+two_yr_recid_x_post_april_tab <- 
+  prop.table(xtabs(~ two_year_recid + post_april_2014, data=df_propub_2_yr_csv), 2) %>% 
+  formatC(digits=3, format = "f")
+
+kable(two_yr_recid_x_post_april_tab,  
+      caption = "Table 6: Two-Year Recidivism Rate vs. Pre-Post April 1 2014 COMPAS screen date - Two-Year Data", 
+      booktabs = T, align = c('l', 'r', 'r')) %>% 
+  kable_styling()  %>%
+  column_spec(2, border_left = T) %>% 
+  add_header_above(c(two_year_recid = 1, post_april_2014 = 2), line = FALSE) %>% 
+  row_spec(0, align='r')
+
+```
+
+``` {r statistical-significance-tests}
+
+# Recidivism Rate
+
+se <- function(x) {round(sd(x)/sqrt(length(x)), 3)}
+
+# ProPublica two-year general recidivism dataset - 7214 total
+
+nobs_ProP <- nrow(df_propub_2_yr_csv)
+mean_propub <- round(mean(df_propub_2_yr_csv$two_year_recid), 3)
+se_propub <- se(df_propub_2_yr_csv$two_year_recid)
+
+# Corrected two-year general recidivism dataset - 6216 total
+
+nobs_correct <- nrow(corrected_compas_two_year)
+mean_correct <- round(mean(corrected_compas_two_year$two_year_recid), 3)
+se_correct <- se(corrected_compas_two_year$two_year_recid)
+
+two_year_recid_ProPublica <- c(nobs_ProP, mean_propub, se_propub)
+two_year_recid_Corrected <- c(nobs_correct, mean_correct, se_correct)
+
+#############
+
+# T-tests
+
+# Testing ProPublica two-year data mean against Corrected two-year data mean (2-sided)
+
+t_test_results_ProPub <- t.test(df_propub_2_yr_csv$two_year_recid, 
+                                mu = mean(corrected_compas_two_year$two_year_recid))
+
+# Accessing results to then report in my customized format
+
+t_test_N <- t_test_results_ProPub$parameter
+
+t_test_t_mean_observed <- round(t_test_results_ProPub$estimate, 3)
+t_test_t_mean_null <- round(t_test_results_ProPub$null.value, 3)
+t_test_t_conf_int <- round(t_test_results_ProPub$conf.int, 3)
+t_test_t_stat <- round(t_test_results_ProPub$statistic, 2)
+t_test_p_val_ProPub <- t_test_results_ProPub$p.value
+
+t_test_table_ProPub <- c(nobs_ProP, t_test_t_mean_observed, se_propub, 
+                         t_test_t_conf_int, t_test_t_mean_null, t_test_t_stat, 
+                         formatC(t_test_p_val_ProPub, format = "e", digits = 0))
+
+names(t_test_table_ProPub) <- c("N","Mean","SE","Low CI","Hi CI","Null Ho","t-stat","p-val.")
+
+t_test_results_ProPub <- NULL
+
+#############
+
+# Testing Corrected two-year data mean against ProPublica two-year data mean (2-sided)
+
+t_test_results_Corrected <- t.test(corrected_compas_two_year$two_year_recid, 
+                                   mu = mean(df_propub_2_yr_csv$two_year_recid))
+
+# Accessing results to then report in my customized format
+
+t_test_N <- t_test_results_Corrected$parameter
+
+t_test_t_mean_observed <- round(t_test_results_Corrected$estimate, 3)
+t_test_t_mean_null <- round(t_test_results_Corrected$null.value, 3)
+t_test_t_conf_int <- round(t_test_results_Corrected$conf.int, 3)
+t_test_t_stat <- round(t_test_results_Corrected$statistic, 2)
+t_test_p_val_Corrected <- t_test_results_Corrected$p.value
+
+t_test_table_Corrected <- c(nobs_correct, t_test_t_mean_observed, se_correct, 
+                            t_test_t_conf_int, t_test_t_mean_null, t_test_t_stat, 
+                            formatC(t_test_p_val_Corrected, format = "e", digits = 0))
+
+names(t_test_table_Corrected) <- c("N","Mean","SE","Low CI","Hi CI","Null Ho","t-stat","p-val.")
+
+t_test_results_Corrected <- NULL
+
+#############
+
+# Chi-squared test for proportions
+
+# Testing ProPublica two-year data mean against Corrected two-year data mean (2 -sided)
+
+prop_test_results_ProPub <- prop.test(sum(df_propub_2_yr_csv$two_year_recid),
+                                      nrow(df_propub_2_yr_csv), 
+                                      p = mean(corrected_compas_two_year$two_year_recid), 
+                                      alternative = "two.sided",
+                                      correct = FALSE)
+
+# Accessing results to then report in my customized format
+
+prop_test_mean_observed <- round(prop_test_results_ProPub$estimate, 3)
+prop_test_mean_null <- round(prop_test_results_ProPub$null.value, 3)
+prop_test_conf_int <- round(prop_test_results_ProPub$conf.int, 3)
+prop_chi_squared <- round(prop_test_results_ProPub$statistic, 1)
+prop_test_p_val_ProPub <- prop_test_results_ProPub$p.value
+
+prop_test_table_ProPub <- c(nobs_ProP, prop_test_mean_observed, prop_test_conf_int,
+                            prop_test_mean_null, prop_chi_squared,
+                            formatC(prop_test_p_val_ProPub, format = "e", digits = 0))
+
+names(prop_test_table_ProPub) <- c("N","Mean","Low CI","Hi CI","Null Ho","chi-sq.","p-val.")
+
+prop_test_results_ProPub <- NULL
+
+#############
+
+# Testing Corrected two-year data mean against ProPublica two-year data mean (2 -sided)
+
+prop_test_results_Corrected <- prop.test(sum(corrected_compas_two_year$two_year_recid), 
+                                         nrow(corrected_compas_two_year), 
+                                         p = mean(df_propub_2_yr_csv$two_year_recid), 
+                                         alternative = "two.sided",
+                                         correct = FALSE)
+
+# Accessing results to then report in my customized format
+
+prop_test_mean_observed <- round(prop_test_results_Corrected$estimate, 3)
+prop_test_mean_null <- round(prop_test_results_Corrected$null.value, 3)
+prop_test_conf_int <- round(prop_test_results_Corrected$conf.int, 3)
+prop_chi_squared <- round(prop_test_results_Corrected$statistic, 1)
+prop_test_p_val_Corrected <- prop_test_results_Corrected$p.value
+
+prop_test_table_Corrected <- c(nobs_correct, prop_test_mean_observed, prop_test_conf_int, 
+                               prop_test_mean_null, prop_chi_squared, 
+                               formatC(prop_test_p_val_Corrected, format = "e", digits = 0))
+
+names(prop_test_table_Corrected) <- c("N","Mean","Low CI","Hi CI","Null Ho","chi-sq.","p-val.")
+
+prop_test_results_Corrected <- NULL
+
+#############
+
+# Putting all results together
+
+# Statistical Significance Tests - Recidivism Rate - ProPublica vs. Corrected Two-Year Datasets
+
+ProPub_vs_Correct <- c(t_test_table_ProPub, prop_test_table_ProPub[6:7])
+Correct_vs_ProPub <- c(t_test_table_Corrected, prop_test_table_Corrected[6:7])
+
+all_tests <- rbind(ProPub_vs_Correct, Correct_vs_ProPub)
+
+kable(all_tests,  
+      caption = "Table 7: Statistical Significance Tests: Recidivism Rate - ProPublica vs. Corrected Two-Year Datasets",
+      booktabs = T) %>% 
+  kable_styling()  %>%
+  row_spec(0:2, align = "c")
+
+```
+
+``` {r, fig.cap='Figure 6: Two-Year Recidivism Rate by COMPAS score decile'}
+
+# Recidivism by COMPAS score decile
+
+hi95 <- function(x) { binom.test(sum(x),length(x),0.5)$conf.int[2] }  
+lo95 <- function(x) { binom.test(sum(x),length(x),0.5)$conf.int[1] } 
+
+# X3 and X4 below and elsewhere are just temporary dataset names or 'tibbles' 
+# which I use for getting data ready for Figures 
+# I also name some tibbles X2 in an Appendix section
+# and I overwrite X2 multiple times as I get data ready for different Figures
+
+X3 <- df_propub_2_yr_csv %>% select(decile_score, two_year_recid)
+
+tibble_propub <- X3 %>% group_by(decile_score) %>%
+  summarize(m=mean(two_year_recid),lo=lo95(two_year_recid),hi=hi95(two_year_recid)) 
+
+X4 <- corrected_compas_two_year %>% select(decile_score, two_year_recid)
+
+tibble_correct <- X4 %>% group_by(decile_score) %>%
+  summarize(m=mean(two_year_recid),lo=lo95(two_year_recid),hi=hi95(two_year_recid)) 
+
+# Plotting both curves on same Figure
+
+plot_both <- ggplot(tibble_propub, aes(x=decile_score, y=m)) +
+  geom_line() +
+  geom_ribbon(data=tibble_correct,  aes(ymin=lo, ymax=hi), fill = "grey80", colour = NA) +
+  geom_line(data=tibble_correct, aes(x=decile_score, y=m), color="darkgreen") +
+  xlab('COMPAS decile score') + ylab('Two-year recidivism rate') +
+  ylim(0, 1) + xlim(1, 10) +
+  scale_x_continuous(breaks=seq(1,10,1))  +
+  geom_hline(yintercept = mean(X3$two_year_recid), linetype = "dashed") +
+  geom_hline(yintercept = mean(X4$two_year_recid), 
+             linetype = "dashed", color="darkgreen") +
+  labs(title="Two-Year Recidivism Rate by COMPAS score decile",
+       subtitle="ProPublica vs. Corrected Two-Year Datasets") +
+  annotate("text", x=3, y=mean(X3$two_year_recid)+.1, 
+           label=paste("ProPublica Two-Year Dataset \n (Mean =", round(mean(X3$two_year_recid),2),")"), 
+           colour="black", angle=0) +
+  annotate("text", x=7.5, y=mean(X4$two_year_recid)-.1, 
+           label=paste("Corrected Two-Year Dataset \n (Mean =", round(mean(X4$two_year_recid),2),")"), 
+           colour="darkgreen", angle=0) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+
+plot_both
+
+```
+
+# Confusion Matrix / Truth Tables
+
+```{r}
+
+# For this analysis, ProPublica turned the COMPAS score categories into a binary classifier
+# ProPublica turned the Low, Medium, High scale into two categories
+# Grouping Medium and High scores into an overall High score category
+# I do the same
+
+#############
+
+# ProPublica two-year general recidivism dataset - 7214 total
+
+# Creating a variable that will print score levels in right order
+# (otherwise printed alphabetically)
+
+df_propub_2_yr_csv$factor_score_text <- factor(df_propub_2_yr_csv$score_text, 
+                                               levels = c("Low","Medium","High"))
+
+# ProPublica Two-Year Dataset: COMPAS Score Categories
+
+score_ProPub_2yr_data_tab <- addmargins(xtabs(~ factor_score_text, data=df_propub_2_yr_csv))
+
+row.names(score_ProPub_2yr_data_tab)[row.names(score_ProPub_2yr_data_tab)=="Sum"] <- "Total"
+
+kable(score_ProPub_2yr_data_tab,  
+      caption = "Table 8: ProPublica Two-Year Dataset: COMPAS Score Categories", booktabs = T) %>% 
+  kable_styling()  %>%
+  row_spec(3, hline_after = T)  
+
+# ProPublica Two-Year Dataset: COMPAS Score Categories (Converted to Binary)
+
+# Grouping Medium and High scores into an overall High score category
+
+df_propub_2_yr_csv$high_score <- ifelse(df_propub_2_yr_csv$score_text=="High" |
+                                          df_propub_2_yr_csv$score_text=="Medium", 1, 0)
+
+score_binary_ProPub_2yr_data_tab <- addmargins(xtabs(~ high_score, data=df_propub_2_yr_csv))
+
+row.names(score_binary_ProPub_2yr_data_tab)[row.names(
+  score_binary_ProPub_2yr_data_tab)=="Sum"] <- "Total"
+
+kable(score_binary_ProPub_2yr_data_tab,  
+      caption = "Table 9: ProPublica Two-Year Dataset: COMPAS Score Categories (Converted to Binary)", 
+      booktabs = T) %>% 
+  kable_styling()  %>%
+  row_spec(2, hline_after = T)
+
+# In automated confusionMatrix function output 
+# R reverses the order of the actual vs predicted on the cross-tab (vs. Python)
+# ProPublica has 'actual' in rows and 'predicted' across columns (using Python)
+# So I do the cross-tab manually, to have the same layout as ProPublica for ease of comparison
+
+# ProPublica Two-Year Dataset Confusion Matrix: Recidivism vs. Low/High COMPAS Score
+
+cont_table_ProP <- table(df_propub_2_yr_csv$two_year_recid, df_propub_2_yr_csv$high_score)
+
+cont_table_ProP_margin <- 
+  cbind(cont_table_ProP, round(rowSums(cont_table_ProP)/sum(cont_table_ProP), 2))
+
+colnames(cont_table_ProP_margin)[colnames(cont_table_ProP_margin)=="Sum"] <- "Total"
+
+kable(cont_table_ProP_margin,  escape = F, 
+      caption = "Table 10: ProPublica Two-Year Dataset Confusion Matrix: Recidivism vs. Low/High COMPAS Score", 
+      booktabs = T,
+      col.names = linebreak(c("Low","High"," "), align = "c")) %>%
+  kable_styling()  %>%
+  column_spec(2, border_left = T) %>%
+  column_spec(4, border_left = T) %>%
+  add_header_above(c("Actual \n two_year_recid" = 1, "Predicted \n COMPAS Score" = 2, " " = 1), line = FALSE) 
+
+# The order in which the variables enter into the confusionMatrix function in R is important
+# First have to put predicted, then actual
+
+confusn_mat_ProP <- confusionMatrix(as.factor(df_propub_2_yr_csv$high_score),
+                                    as.factor(df_propub_2_yr_csv$two_year_recid), positive="1" )
+
+# Above I have replicated the results by ProPublica
+# In particular, those reported in "In [51]" in their github Jupyter notebook
+
+#############################
+
+# Corrected two-year general recidivism dataset - 6216 total
+
+# Corrected Two-Year Dataset: COMPAS Score Categories (Converted to Binary)
+
+# Grouping Medium and High scores into an overall High score category
+
+corrected_compas_two_year$high_score <- ifelse(corrected_compas_two_year$score_text=="High" |
+                                                 corrected_compas_two_year$score_text=="Medium", 1, 0)
+
+score_binary_correct_2yr_data_tab <- addmargins(xtabs(~ high_score, data=corrected_compas_two_year))
+
+row.names(score_binary_correct_2yr_data_tab)[row.names(
+  score_binary_correct_2yr_data_tab)=="Sum"] <- "Total"
+
+kable(score_binary_correct_2yr_data_tab,  
+      caption = "Table 11: Corrected Two-Year Dataset: COMPAS Score Categories (Converted to Binary)", 
+      booktabs = T) %>% 
+  kable_styling()  %>%
+  row_spec(2, hline_after = T) 
+
+# Corrected Two-Year Dataset Confusion Matrix: Recidivism vs. Low/High COMPAS Score
+
+cont_table_Corrected <- 
+  table(corrected_compas_two_year$two_year_recid, corrected_compas_two_year$high_score)
+
+cont_table_Corrected_margin <- 
+  cbind(cont_table_Corrected, round(rowSums(cont_table_Corrected)/sum(cont_table_Corrected), 2))
+
+kable(cont_table_Corrected_margin,  escape = F, 
+      caption = "Table 12: Corrected Two-Year Dataset Confusion Matrix: Recidivism vs. Low/High COMPAS Score", 
+      booktabs = T,
+      col.names = linebreak(c("Low","High"," "), align = "c")) %>%
+  kable_styling()  %>%
+  column_spec(2, border_left = T) %>%
+  column_spec(4, border_left = T) %>%
+  add_header_above(c("Actual \n two_year_recid" = 1, "Predicted \n COMPAS Score" = 2, " " = 1), line = FALSE) 
+
+confusn_mat_correct <- confusionMatrix(as.factor(corrected_compas_two_year$high_score),
+                                       as.factor(corrected_compas_two_year$two_year_recid), 
+                                       positive="1" )
+
+#############################
+
+# Comparing the confusion matrix results from the two datasets
+
+# Accessing statistics produced by confusionMatrix
+
+#############
+
+# ProPublica two-year general recidivism dataset - 7214 total
+
+cm_records_ProP <- sum(as.matrix(confusn_mat_ProP$table))
+
+cm_accuracy_ProP <- round(confusn_mat_ProP$overall, 3)
+
+cm_stats_ProP <- round(confusn_mat_ProP$byClass, 3)
+
+#############
+
+# Corrected two-year general recidivism dataset - 6216 total
+
+cm_records_Corrected <- sum(as.matrix(confusn_mat_correct$table))
+
+cm_accuracy_Corrected <- round(confusn_mat_correct$overall, 3)
+
+cm_stats_Corrected <- round(confusn_mat_correct$byClass, 3)
+
+#############
+
+# Things that changed relatively little
+# Accuracy, Specificity, Sensitivity (and hence FPR and FNR)
+
+ProP_FPR <- 1 - cm_stats_ProP[names(cm_stats_ProP) == "Specificity"]
+names(ProP_FPR) <- ("FPR")
+
+ProP_FNR <- 1 - cm_stats_ProP[names(cm_stats_ProP) == "Sensitivity"]
+names(ProP_FNR) <- ("FNR")
+
+ProPublica_results <- c(cm_records_ProP,
+                        cm_accuracy_ProP[names(cm_accuracy_ProP)=="Accuracy"],
+                        ProP_FPR, ProP_FNR)
+
+Corrected_FPR <- 1 - cm_stats_Corrected[names(cm_stats_Corrected) == "Specificity"]
+names(Corrected_FPR) <- ("FPR")
+
+Corrected_FNR <- 1 - cm_stats_Corrected[names(cm_stats_Corrected) == "Sensitivity"]
+names(Corrected_FNR) <- ("FNR")
+
+Corrected_results <- c(cm_records_Corrected, 
+                       cm_accuracy_Corrected[names(cm_accuracy_Corrected)=="Accuracy"],
+                       Corrected_FPR, Corrected_FNR)
+
+kable(rbind(ProPublica_results, Corrected_results),  
+      caption = "Table 13: Confusion Matrix Results that are similar between ProPublica vs. Corrected Two-Year Datasets", 
+      booktabs = T) %>% 
+  kable_styling()  
+
+#############
+
+# Things that DO change substantially
+
+# Here mostly rounding to only 2 decimals, since differences clear
+
+cm_stats_ProP <- round(confusn_mat_ProP$byClass, 2)
+cm_stats_Corrected <- round(confusn_mat_correct$byClass, 2)
+
+# Repeat rounded to 3 decimals for recidivism rate (prevalence)
+
+cm_stats_ProP_3 <- round(confusn_mat_ProP$byClass, 3)
+cm_stats_Corrected_3 <- round(confusn_mat_correct$byClass, 3)
+
+# Splitting into two objects to force prevalence to be displayed first
+
+ProPublica_results <- c(cm_records_ProP,
+                        cm_stats_ProP_3[names(cm_stats_ProP_3) %in% c("Prevalence")],
+                        cm_stats_ProP[names(cm_stats_ProP) %in% 
+                                        c("Pos Pred Value","Neg Pred Value","Detection Rate")])
+
+Corrected_results <- c(cm_records_Corrected,
+                       cm_stats_Corrected_3[names(cm_stats_Corrected_3) %in% c("Prevalence")],
+                       cm_stats_Corrected[names(cm_stats_Corrected) %in% 
+                                            c("Pos Pred Value","Neg Pred Value","Detection Rate")])
+
+kable(rbind(ProPublica_results, Corrected_results),  
+      caption = "Table 14: Confusion Matrix Results that are different between ProPublica vs. Corrected Two-Year Datasets",
+      booktabs = T) %>% 
+  kable_styling() 
+
+```
+
+```{r COMPAS-score-recidivists-pre-vs-post-April-2014}
+
+# Here I examine the COMPAS score for recidivists pre vs. post April 1, 2014
+# To see why the false negative rate (FNR) is very similar in the Corrected two-year dataset vs ProPublica's two-year dataset
+# This suggests that the COMPAS scores of the 998 post April 1, 2014 recidivists are pretty similar
+# to the COMPAS scores of the pre-April 1, 2014 recidivists (which is indeed what I find here)
+
+COMPAS_score_x_post_april_tab_raw <- 
+  addmargins(xtabs(~ high_score + post_april_2014, 
+                   data=df_propub_2_yr_csv[which(df_propub_2_yr_csv$two_year_recid==1), ]), 1)
+
+row.names(COMPAS_score_x_post_april_tab_raw)[row.names(COMPAS_score_x_post_april_tab_raw)=="Sum"] <- "Total"
+
+kable(COMPAS_score_x_post_april_tab_raw,  
+      caption = "Table 15: COMPAS Low/High Score vs. Pre-Post April 1 2014 COMPAS screen date - Two-Year Data", 
+      booktabs = T) %>% 
+  kable_styling()  %>%
+  row_spec(2, hline_after = T) %>% 
+  column_spec(2, border_left = T) %>% 
+  add_header_above(c("High COMPAS score" = 1, post_april_2014 = 2), line = FALSE) %>% 
+  add_header_above(c(" ", "Recidivists Only" = 2)) 
+
+# In percents
+
+COMPAS_score_x_post_april_tab <- 
+  prop.table(xtabs(~ high_score + post_april_2014,
+                   data=df_propub_2_yr_csv[which(df_propub_2_yr_csv$two_year_recid==1), ]), 2) %>% round(2)
+
+kable(COMPAS_score_x_post_april_tab,  
+      caption = "Table 16: COMPAS Low/High Score vs. Pre-Post April 1 2014 COMPAS screen date - Two-Year Data", 
+      booktabs = T) %>% 
+  column_spec(2, border_left = T) %>% 
+  kable_styling()  %>%
+  add_header_above(c("High COMPAS score" = 1, post_april_2014 = 2), line = FALSE) %>% 
+  add_header_above(c(" ", "Recidivists Only" = 2)) 
+
+```
+
+```{r confusion-matrix-by-race}
+
+# ProPublica two-year general recidivism dataset - 7214 total (all race groups)
+
+# Black
+
+df_propub_2_yr_black <- df_propub_2_yr_csv[which(df_propub_2_yr_csv$race=="African-American"),]
+
+# nrow(df_propub_2_yr_black)
+
+# Confusion Matrix - Recidivism vs. Low/High COMPAS Score
+
+confusn_mat_black_ProP <- confusionMatrix(as.factor(df_propub_2_yr_black$high_score),
+                                          as.factor(df_propub_2_yr_black$two_year_recid), positive="1" )
+
+#############
+
+# White
+
+df_propub_2_yr_white <- df_propub_2_yr_csv[which(df_propub_2_yr_csv$race=="Caucasian"),]
+
+# nrow(df_propub_2_yr_white)
+
+# Confusion Matrix - Recidivism vs. Low/High COMPAS Score
+
+confusn_mat_white_ProP <- confusionMatrix(as.factor(df_propub_2_yr_white$high_score),
+                                          as.factor(df_propub_2_yr_white$two_year_recid), positive="1" )
+
+#############################
+
+# Corrected two-year general recidivism dataset - 6216 total (all race groups)
+
+# Black
+
+corrected_compas_two_year_black <- 
+  corrected_compas_two_year[which(corrected_compas_two_year$race=="African-American"),]
+
+# nrow(corrected_compas_two_year_black)
+
+# Confusion Matrix - Recidivism vs. Low/High COMPAS Score
+
+confusn_mat_black_correct <- confusionMatrix(as.factor(corrected_compas_two_year_black$high_score),
+                                             as.factor(corrected_compas_two_year_black$two_year_recid), 
+                                             positive="1" )
+
+#############
+
+# White
+
+corrected_compas_two_year_white <- 
+  corrected_compas_two_year[which(corrected_compas_two_year$race=="Caucasian"),]
+
+# nrow(corrected_compas_two_year_white)
+
+# Confusion Matrix - Recidivism vs. Low/High COMPAS Score
+
+confusn_mat_white_correct <- confusionMatrix(as.factor(corrected_compas_two_year_white$high_score),
+                                             as.factor(corrected_compas_two_year_white$two_year_recid), 
+                                             positive="1" )
+
+#############################
+
+# Comparing the confusion matrix results from the two datasets
+
+# Accessing statistics produced by confusionMatrix
+
+#############
+
+# ProPublica two-year general recidivism dataset - 7214 total
+
+cm_records_black_ProP <- sum(as.matrix(confusn_mat_black_ProP$table))
+
+cm_accuracy_black_ProP <- round(confusn_mat_black_ProP$overall, 3)
+
+cm_stats_black_ProP <- round(confusn_mat_black_ProP$byClass, 3)
+
+cm_records_white_ProP <- sum(as.matrix(confusn_mat_white_ProP$table))
+
+cm_accuracy_white_ProP <- round(confusn_mat_white_ProP$overall, 3)
+
+cm_stats_white_ProP <- round(confusn_mat_white_ProP$byClass, 3)
+
+#############
+
+# Corrected two-year general recidivism dataset - 6216 total
+
+cm_records_black_Corrected <- sum(as.matrix(confusn_mat_black_correct$table))
+
+cm_accuracy_black_Corrected <- round(confusn_mat_black_correct$overall, 3)
+
+cm_stats_black_Corrected <- round(confusn_mat_black_correct$byClass, 3)
+
+cm_records_white_Corrected <- sum(as.matrix(confusn_mat_white_correct$table))
+
+cm_accuracy_white_Corrected <- round(confusn_mat_white_correct$overall, 3)
+
+cm_stats_white_Corrected <- round(confusn_mat_white_correct$byClass, 3)
+
+#############
+
+# Things that changed relatively little
+# Accuracy, Specificity, Sensitivity (and hence FPR and FNR)
+
+# Black
+
+ProP_black_FPR <- 1 - cm_stats_black_ProP[names(cm_stats_black_ProP) == "Specificity"]
+names(ProP_black_FPR) <- ("FPR")
+
+ProP_black_FNR <- 1 - cm_stats_black_ProP[names(cm_stats_black_ProP) == "Sensitivity"]
+names(ProP_black_FNR) <- ("FNR")
+
+ProPublica_results_blacks <- c(cm_records_black_ProP, 
+                               cm_accuracy_black_ProP[names(cm_accuracy_black_ProP)=="Accuracy"],
+                               ProP_black_FPR, ProP_black_FNR)
+
+Corrected_black_FPR <- 1 - cm_stats_black_Corrected[names(cm_stats_black_Corrected) == "Specificity"]
+names(Corrected_black_FPR) <- ("FPR")
+
+Corrected_black_FNR <- 1 - cm_stats_black_Corrected[names(cm_stats_black_Corrected) == "Sensitivity"]
+names(Corrected_black_FNR) <- ("FNR")
+
+Corrected_results_blacks <- c(cm_records_black_Corrected, 
+                              cm_accuracy_black_Corrected[names(cm_accuracy_black_Corrected)=="Accuracy"],
+                              Corrected_black_FPR, Corrected_black_FNR)
+
+kable(rbind(ProPublica_results_blacks, Corrected_results_blacks),  
+      caption = "Table 17: Blacks: Confusion Matrix Results that are similar between ProPublica vs Corrected Two-Year Data", 
+      booktabs = T) %>% 
+  kable_styling()  
+
+#############
+
+# White
+
+ProP_white_FPR <- 1 - cm_stats_white_ProP[names(cm_stats_white_ProP) == "Specificity"]
+names(ProP_white_FPR) <- ("FPR")
+
+ProP_white_FNR <- 1 - cm_stats_white_ProP[names(cm_stats_white_ProP) == "Sensitivity"]
+names(ProP_white_FNR) <- ("FNR")
+
+ProPublica_results_whites <- c(cm_records_white_ProP, 
+                               cm_accuracy_white_ProP[names(cm_accuracy_white_ProP)=="Accuracy"],
+                               ProP_white_FPR, ProP_white_FNR)
+
+Corrected_white_FPR <- 1 - cm_stats_white_Corrected[names(cm_stats_white_Corrected) == "Specificity"]
+names(Corrected_white_FPR) <- ("FPR")
+
+Corrected_white_FNR <- 1 - cm_stats_white_Corrected[names(cm_stats_white_Corrected) == "Sensitivity"]
+names(Corrected_white_FNR) <- ("FNR")
+
+Corrected_results_whites <- c(cm_records_white_Corrected, 
+                              cm_accuracy_white_Corrected[names(cm_accuracy_white_Corrected)=="Accuracy"],
+                              Corrected_white_FPR, Corrected_white_FNR)
+
+kable(rbind(ProPublica_results_whites, Corrected_results_whites),  
+      caption = "Table 18: Whites: Confusion Matrix Results that are similar between ProPublica v Corrected Two-Year Data", 
+      booktabs = T) %>% 
+  kable_styling()  
+
+#############
+
+# Things that DO change substantially
+
+# Black
+
+# Here rounding to only 2 decimals, since differences clear
+
+cm_stats_black_ProP <- round(confusn_mat_black_ProP$byClass, 2)
+cm_stats_black_Corrected <- round(confusn_mat_black_correct$byClass, 2)
+
+# Splitting into two objects to force prevalence to be displayed first
+
+ProPublica_results_blacks <- c(cm_records_black_ProP,
+                               cm_stats_black_ProP[names(cm_stats_black_ProP) %in% c("Prevalence")],
+                               cm_stats_black_ProP[names(cm_stats_black_ProP) %in% 
+                                                     c("Pos Pred Value","Neg Pred Value","Detection Rate")])
+
+Corrected_results_blacks <- c(cm_records_black_Corrected,
+                              cm_stats_black_Corrected[names(cm_stats_black_Corrected) %in% c("Prevalence")],
+                              cm_stats_black_Corrected[names(cm_stats_black_Corrected) %in% 
+                                                         c("Pos Pred Value","Neg Pred Value","Detection Rate")])
+
+kable(rbind(ProPublica_results_blacks, Corrected_results_blacks),  
+      caption = "Table 19: Blacks: Confusion Matrix Results that do change between ProPublica vs Corrected Two-Year Data", 
+      booktabs = T) %>% 
+  kable_styling()  
+
+#############
+
+# White
+
+cm_stats_white_ProP <- round(confusn_mat_white_ProP$byClass, 2)
+cm_stats_white_Corrected <- round(confusn_mat_white_correct$byClass, 2)
+
+ProPublica_results_whites <- c(cm_records_white_ProP,
+                               cm_stats_white_ProP[names(cm_stats_white_ProP) %in% c("Prevalence")],
+                               cm_stats_white_ProP[names(cm_stats_white_ProP) %in% 
+                                                     c("Pos Pred Value","Neg Pred Value","Detection Rate")])
+
+Corrected_results_whites <- c(cm_records_white_Corrected,
+                              cm_stats_white_Corrected[names(cm_stats_white_Corrected) %in% c("Prevalence")],
+                              cm_stats_white_Corrected[names(cm_stats_white_Corrected) %in% 
+                                                         c("Pos Pred Value","Neg Pred Value","Detection Rate")])
+
+kable(rbind(ProPublica_results_whites, Corrected_results_whites),  
+      caption = "Table 20: Whites: Confusion Matrix Results that do change between ProPublica vs Corrected Two-Year Data", 
+      booktabs = T) %>% 
+  kable_styling()  
+
+```
+
+# Conclusion
+
+<!-- =================================================================================== -->
+<!-- =================================================================================== -->
+
+# Appendix
+
+## Full Dataset Drops
+
+```{r}
+
+# [This code is commented out, but could be run]
+
+# Starting from the full data, for some reason, ProPublica dropped the last 756 person ids 
+# Additionally, of the remaining 11001 people, it dropped 670 people who did not appear to have good data
+
+# # Overlap in these two groups in full data
+# length(which(df_full_entire$is_recid==-1))
+# df_full_entire$last_756 <- ifelse(df_full_entire$id>=11002, 1, 0)
+# xtabs(~ df_full_entire$last_756 + df_full_entire$is_recid)
+
+# Thus we end up with 10331 people total in the full dataset
+# 11757 - 756 - 670 = 10331
+# [This is the same number of people as in ProPublica's Cox general recidivism dataset]
+
+```
+
+## Assumptions Regarding Data and Analysis
+
+## Survival Analysis
+
+```{r, fig.height=3.5, fig.cap='Figure 7: Non-Recidivism Survival Curves - Three Datasets'}
+
+# ProPublica full dataset - 10331 total
+# [Full minus last 756 people and 670 is_recid=-1]
+
+#############################
+
+# Reading in ProPublica's general recidivism Cox dataset
+
+d.cox <- read.csv('https://raw.githubusercontent.com/propublica/compas-analysis/master/cox-parsed.csv', as.is = TRUE)
+
+# length(unique(d.cox$id))
+
+#############################
+
+# Data is reduced by ProPublica from 10331 to 10314 people 
+# i.e. reduction of 17 people
+# Due to score_text = "N/A" and non-positive time spells outside of prison
+# I do not drop these people here (but results would be the same if did, since so few people)
+
+#############################
+
+# ProPublica full dataset - 10331 total
+# [Full minus last 756 people and 670 is_recid=-1]
+
+#############################
+
+f <- Surv(start, end, event, type="counting") ~ 1
+
+fit_full <- survfit(f, data=d.cox)
+
+d_surv_full <- data.frame(time = fit_full$time,
+                          n.risk = fit_full$n.risk,
+                          n.event = fit_full$n.event,
+                          n.censor = fit_full$n.censor,
+                          surv = fit_full$surv,
+                          upper = fit_full$upper,
+                          lower = fit_full$lower
+)
+
+# Survival rate at two-year mark - two decimals
+
+two_year_surv_full <- round(d_surv_full$surv[which(d_surv_full$time==730)], 2)
+
+# Survival rate at two-year mark - three decimals
+
+two_year_surv_full_3 <- round(d_surv_full$surv[which(d_surv_full$time==730)], 3)
+
+plot_surv_full <- ggplot(data = fit_full, mapping = aes(x = time, y = surv)) +
+  geom_ribbon(data=fit_full,  aes(ymin=lower, ymax=upper), fill = "cyan", colour = NA) +
+  geom_point(shape=".", color = "blue") + ylim(0,1) +
+  geom_vline(xintercept = 730, linetype="dashed", color = "grey40") + 
+  geom_hline(yintercept = two_year_surv_full, linetype="dashed", color = "grey40") +
+  labs(title=paste0("Full Data \n [N = ", length(unique(d.cox$id))," People]"),
+       x="Days since original offense", y = "Survival Rate") +
+  annotate("text", 
+           hjust=0, x=0, y=0.3, size=2,
+           label=paste(" Survival Rate at Two-Years =", two_year_surv_full,"\n",
+                       "Recidivism Rate at Two-Years =", (1-two_year_surv_full)),
+           colour="black", angle=0) + 
+  theme(plot.title = element_text(size=9, hjust = 0.5)) + 
+  theme(axis.title.x=element_text(size=9))
+
+#############################
+
+# ProPublica two-year general recidivism dataset - 7214 total
+
+#############################
+
+# First recreate the two-year dataset to have time spell variables from Cox
+
+# Summing time to see if more than 730 days free (or 2 years)
+
+d.cox$time_spell <- d.cox$end - d.cox$start
+
+for(x in unique(d.cox$id)) {
+  d.cox$time_spell_sum[d.cox$id==x] <- sum(d.cox$time_spell[d.cox$id==x])
+}
+
+d.cox$two_years <- ifelse(d.cox$time_spell_sum > 730, 1, 0)
+
+d.cox$two_year_recid <- ifelse(d.cox$two_years == 0 & d.cox$is_recid == 1, 1, 0)
+
+d.cox$propub <- ifelse(d.cox$two_years == 1 
+                       | (d.cox$two_years == 0 & d.cox$is_recid==1), 1, 0)
+
+# Have to drop few people with score_text = N/A 
+# Dropping those 11 people here
+
+cox_minus_11 <- d.cox[which(d.cox$score_text!="N/A"), ]
+
+# length(unique(cox_minus_11$id))
+
+Cox_ProPub_2_year <- cox_minus_11[which(cox_minus_11$propub==1),]
+
+# # Here can see that I re-created 7214 dataset
+# length(unique(Cox_ProPub_2_year$id))
+
+#############
+
+f <- Surv(start, end, event, type="counting") ~ 1
+
+fit_ProPub_2_year <- survfit(f, data=Cox_ProPub_2_year)
+
+d_surv_ProPub_2_yr <- data.frame(time = fit_ProPub_2_year$time,
+                                 n.risk = fit_ProPub_2_year$n.risk,
+                                 n.event = fit_ProPub_2_year$n.event,
+                                 n.censor = fit_ProPub_2_year$n.censor,
+                                 surv = fit_ProPub_2_year$surv,
+                                 upper = fit_ProPub_2_year$upper,
+                                 lower = fit_ProPub_2_year$lower
+)
+
+# Survival rate at two-year mark - two decimals
+
+two_year_surv_ProPub_2_yr <- round(d_surv_ProPub_2_yr$surv[which(d_surv_ProPub_2_yr$time==730)], 2)
+
+# Survival rate at two-year mark - three decimals
+
+two_year_surv_ProPub_2_yr_3 <- round(d_surv_ProPub_2_yr$surv[which(d_surv_ProPub_2_yr$time==730)], 3)
+
+plot_surv_ProPub_2_yr <- ggplot(data = fit_ProPub_2_year, mapping = aes(x = time, y = surv)) + 
+  geom_ribbon(data=fit_ProPub_2_year,  aes(ymin=lower, ymax=upper), fill = "cyan", colour = NA) +
+  geom_point(shape=".", color = "blue") + ylim(0,1) +
+  geom_vline(xintercept = 730, linetype="dashed", color = "grey40") + 
+  geom_hline(yintercept = two_year_surv_ProPub_2_yr, linetype="dashed", color = "grey40") +
+  labs(title=paste0("ProPublica Two-Year Data \n [N = ", length(unique(Cox_ProPub_2_year$id))," People]"),
+       x="Days since original offense", y = "Survival Rate") +
+  annotate("text", 
+           hjust=0, x=0, y=0.3, size=2,
+           label=paste(" Survival Rate at Two-Years =", two_year_surv_ProPub_2_yr,"\n",
+                       "Recidivism Rate at Two-Years =", (1-two_year_surv_ProPub_2_yr)),
+           colour="black", angle=0)  + 
+  theme(plot.title = element_text(size=9, hjust = 0.5)) + 
+  theme(axis.title.x=element_text(size=9))
+
+#############################
+
+# Corrected two-year general recidivism dataset - 6216 total
+
+#############################
+
+Cox_ProPub_2_year$compas_date_numeric <- as.numeric(as.Date(Cox_ProPub_2_year$compas_screening_date))
+
+Cox_ProPub_2_year$post_april_2014 <- ifelse(Cox_ProPub_2_year$compas_date_numeric > 16161, 1, 0)
+
+Cox_corr_data_2_yr <- Cox_ProPub_2_year[which(Cox_ProPub_2_year$post_april_2014==0), ]
+
+# length(unique(Cox_corr_data_2_yr$id))
+
+f <- Surv(start, end, event, type="counting") ~ 1
+
+fit_corr_2_yr <- survfit(f, data=Cox_corr_data_2_yr)
+
+d_surv_2_yr <- data.frame(time = fit_corr_2_yr$time,
+                          n.risk = fit_corr_2_yr$n.risk,
+                          n.event = fit_corr_2_yr$n.event,
+                          n.censor = fit_corr_2_yr$n.censor,
+                          surv = fit_corr_2_yr$surv,
+                          upper = fit_corr_2_yr$upper,
+                          lower = fit_corr_2_yr$lower
+)
+
+# Survival rate at two-year mark - two decimals
+
+two_year_surv_corr_2_yr <- round(d_surv_2_yr$surv[which(d_surv_2_yr$time==730)], 2)
+
+# Survival rate at two-year mark - three decimals
+
+two_year_surv_corr_2_yr_3 <- round(d_surv_2_yr$surv[which(d_surv_2_yr$time==730)], 3)
+
+# Here y intercept goes down from approx 0.66 to 0.64 (relative to full data)
+
+plot_surv_corr_2_yr <- ggplot(data = fit_corr_2_yr, mapping = aes(x = time, y = surv)) + 
+  geom_ribbon(data=fit_corr_2_yr,  aes(ymin=lower, ymax=upper), fill = "cyan", colour = NA) +
+  geom_point(shape=".", color = "blue") + ylim(0,1) +
+  geom_vline(xintercept = 730, linetype="dashed", color = "grey40") + 
+  geom_hline(yintercept = two_year_surv_corr_2_yr, linetype="dashed", color = "grey40") +
+  labs(title=paste0("Corrected Two-Year Data \n [N = ", length(unique(Cox_corr_data_2_yr$id))," People]"),
+       x="Days since original offense", y = "Survival Rate") +
+  annotate("text", 
+           hjust=0, x=0, y=0.3, size=2,
+           label=paste(" Survival Rate at Two-Years =", two_year_surv_corr_2_yr,"\n",
+                       "Recidivism Rate at Two-Years =", (1-two_year_surv_corr_2_yr)),
+           colour="black", angle=0)  + 
+  theme(plot.title = element_text(size=9, hjust = 0.5)) + 
+  theme(axis.title.x=element_text(size=9))
+
+#############
+
+# Combining three survival graphs
+
+grid.arrange(plot_surv_full, plot_surv_ProPub_2_yr, plot_surv_corr_2_yr,
+             ncol = 3, 
+             top = textGrob("   Non-Recidivism Survival Curve",
+                            gp=gpar(fontsize=13, font=2)))
+
+
+```
+
+## Optimal COMPAS Screening Date Cutoff
+
+```{r, fig.width=6, fig.height=4, fig.cap='Figure 8: Exploring Optimal COMPAS Screening Date Cutoff for Two-Year Recidivism Analysis'}
+
+# In full dataset ProPublica only uses positive individual record time spells (outside prison)
+# So I redo time spell variable here, with this additional condition
+
+d.cox$time_spell_sum <- NA
+
+for(x in unique(d.cox$id)) {
+  d.cox$time_spell_sum[d.cox$id==x] <-
+    sum(d.cox$time_spell[d.cox$id==x & d.cox$time_spell>0])
+}
+
+# Now generate a dataset that only has one record per person
+
+df_reduced <- subset(d.cox, select = -c(in_custody, out_custody, start, end, event, time_spell))
+
+cox_unq <- unique(df_reduced)
+
+# nrow(cox_unq)
+
+cox_unq$compas_date_numeric <- as.numeric(as.Date(cox_unq$compas_screening_date))
+
+cox_unq$post_april_2014 <- ifelse(cox_unq$compas_date_numeric > 16161, 1, 0)
+
+cox_unq$two_years <- ifelse(cox_unq$time_spell_sum > 730, 1, 0)
+
+# Use is_recid (instead of creating a two_year_recid) for consistency with earlier Figures
+
+cox_pre_april_2014  <- cox_unq[which(cox_unq$is_recid==0 & cox_unq$post_april_2014==0),]
+
+cox_post_april_2014 <- cox_unq[which(cox_unq$is_recid==0 & cox_unq$post_april_2014==1),]
+
+# In the Figure below see that optimal cutoff appears to be sometime in early January, 2014
+
+# Figure for only people who do not recidivate
+
+ggplot(data=cox_pre_april_2014, 
+       aes(x=as.Date(compas_screening_date), y=two_years)) +
+  geom_smooth() + 
+  geom_smooth(data=cox_post_april_2014, 
+              aes(x=as.Date(compas_screening_date), y=two_years)) +
+  geom_vline(xintercept = as.Date("2014-04-01"), col = "red") +
+  geom_vline(xintercept = as.Date("2014-01-15"), col = "red", lty = "dashed") +
+  labs(title="Fraction of People by COMPAS screen date observed for 2+ years \n (outside jail or prison)", 
+       subtitle=paste0("Full Dataset - Non-Recidivists [N = ", 
+                       nrow(cox_pre_april_2014)+nrow(cox_post_april_2014), "]"),
+       x="COMPAS Screening Date", y = "Fraction observed for 2+ years outside prison") +
+  ylim(0,1) +
+  theme(plot.title = element_text(size=12, hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5)) +
+  geom_text(aes(x=as.Date("2014-09-01"), label="Post-April 1, 2014"   , y=0.2 ), colour="red", angle=0) + 
+  geom_text(aes(x=as.Date("2013-08-01"), label="Pre-January 15, 2014" , y=0.75), colour="red", angle=0) 
+
+```
+
+```{r recidivism-rate-january-2014-cutoff}
+
+# Checking if recidivism rate is different if we use this earlier optimal cutoff
+# As opposed to the April 1, 2014
+# We see that results are very similar
+
+df_propub_2_yr_csv$post_january_15_2014 <- ifelse(df_propub_2_yr_csv$compas_date_numeric > 16085, 1, 0)
+
+Correct_2_yr_recid_january_15_2014 <- mean(df_propub_2_yr_csv$two_year_recid
+                                           [which(df_propub_2_yr_csv$post_january_15_2014==0)])
+```
+
+```{r quarterly-recidivism-rates}
+
+# Here look at recidivism rates by year-quarter in ProPublica's two-year dataset
+# Using quarter function from lubridate R package
+
+df_propub_2_yr_csv$quarter_COMPAS_screen <- 
+  lubridate::quarter(as.Date(df_propub_2_yr_csv$compas_screening_date), with_year = TRUE)
+
+two_yr_recid_x_quarter_year <- prop.table(xtabs(~ two_year_recid + quarter_COMPAS_screen, 
+                                                data=df_propub_2_yr_csv), 2) %>% 
+  formatC(digits = 3, format = "f")
+
+kable(two_yr_recid_x_quarter_year,  
+      caption = "Table 21: Two-Year Recidivism Rate vs. COMPAS screen date year-quarter - ProPublica Two-Year Data", 
+      booktabs = T, align = c('l', rep('r', times=8))) %>% 
+  kable_styling() %>%  
+  column_spec(2, border_left = T) %>% 
+  add_header_above(c(two_year_recid = 1, "Year-Quarter" = 8), line = FALSE) 
+
+```
+
+## ROC Curves
+
+```{r, fig.cap='Figure 9: ROC curves for Two-Year Recidivism using COMPAS score deciles'}
+
+# ProPublica two-year general recidivism dataset - 7214 total 
+
+par(pty = "s")
+
+plot.roc(df_propub_2_yr_csv$two_year_recid, df_propub_2_yr_csv$decile_score, print.auc=TRUE,
+         print.auc.pattern = "ProPublica Two-Year Data AUC %.3f", 
+         print.auc.y = 0.4, print.auc.x = 0.923, 
+         xlim(1,0), lw=6) 
+
+save_roc_ProP <- roc(df_propub_2_yr_csv$two_year_recid, df_propub_2_yr_csv$decile_score) 
+
+save_roc_ProP <- save_roc_ProP[names(save_roc_ProP) %in% c("specificities","sensitivities","thresholds","auc")] 
+
+ProP_roc_results <- cbind(save_roc_ProP$thresholds, save_roc_ProP$specificities, save_roc_ProP$sensitivities)
+
+points(ProP_roc_results[5,2],ProP_roc_results[5,3], pch = 3, lw=4, col = "blue")
+
+#############################
+
+# Corrected two-year general recidivism dataset - 6216 total 
+
+plot.roc(corrected_compas_two_year$two_year_recid, corrected_compas_two_year$decile_score, 
+         print.auc=TRUE, 
+         print.auc.y = 0.32, print.auc.x = 0.9, 
+         print.auc.pattern = "Corrected Two-Year Data AUC %.3f", 
+         col="darkgreen", add=TRUE, grid = TRUE, grid.col = "gray45",
+         xlim(1,0))
+
+save_roc_Corrected <- roc(corrected_compas_two_year$two_year_recid, corrected_compas_two_year$decile_score) 
+
+save_roc_Corrected <- save_roc_Corrected[names(save_roc_Corrected) %in% c("specificities","sensitivities","thresholds","auc")] 
+
+Corrected_roc_results <- cbind(save_roc_Corrected$thresholds, save_roc_Corrected$specificities, save_roc_Corrected$sensitivities)
+
+points(Corrected_roc_results[5,2], Corrected_roc_results[5,3], pch = 4, lw=4, col = "blue")
+
+text(0.8,0.85, "Low vs. High Score split:", cex=0.65, col="blue")
+
+text(0.8,0.75, "Score Deciles 1-4 \n vs.\n Score Deciles 5-10", cex=0.65, col="blue")
+
+# Resetting plot parameter to default
+
+par(pty = "m")
+
+```
+
+## Confusion Matrix - Additional Results by Race
+
+```{r}
+
+# ProPublica two-year general recidivism dataset - 7214 total (all race groups)
+
+# Black
+
+# nrow(df_propub_2_yr_black)
+
+# Confusion Matrix - Recidivism vs. Low/High COMPAS Score
+
+cont_table_ProP_black <- table(df_propub_2_yr_black$two_year_recid, df_propub_2_yr_black$high_score)
+
+cont_table_ProP_black_margin <- 
+  cbind(cont_table_ProP_black, round(rowSums(cont_table_ProP_black)/sum(cont_table_ProP_black), 2))
+
+kable(cont_table_ProP_black_margin,  escape = F, 
+      caption = "Table 22: Blacks ProPublica Two-Year Dataset Confusion Matrix: Recidivism vs. Low/High COMPAS Score", 
+      booktabs = T,
+      col.names = linebreak(c("Low","High"," "), align = "c")) %>%
+  kable_styling() %>%  
+  column_spec(2, border_left = T) %>%
+  column_spec(4, border_left = T) %>%
+  add_header_above(c("Actual \n two_year_recid" = 1, "Predicted \n COMPAS Score" = 2, " " = 1), line = FALSE) 
+
+confusn_mat_black_ProP <- confusionMatrix(as.factor(df_propub_2_yr_black$high_score),
+                                          as.factor(df_propub_2_yr_black$two_year_recid), positive="1" )
+
+#############
+
+# White
+
+# nrow(df_propub_2_yr_white)
+
+# Confusion Matrix - Recidivism vs. Low/High COMPAS Score
+
+cont_table_ProP_white <- table(df_propub_2_yr_white$two_year_recid, df_propub_2_yr_white$high_score)
+
+cont_table_ProP_white_margin <- 
+  cbind(cont_table_ProP_white, round(rowSums(cont_table_ProP_white)/sum(cont_table_ProP_white), 2))
+
+kable(cont_table_ProP_white_margin,  escape = F, 
+      caption = "Table 23: Whites ProPublica Two-Year Dataset Confusion Matrix: Recidivism vs. Low/High COMPAS Score", 
+      booktabs = T,
+      col.names = linebreak(c("Low","High"," "), align = "c")) %>%
+  kable_styling() %>%  
+  column_spec(2, border_left = T) %>%
+  column_spec(4, border_left = T) %>%
+  add_header_above(c("Actual \n two_year_recid" = 1, "Predicted \n COMPAS Score" = 2, " " = 1), line = FALSE) 
+
+confusn_mat_white_ProP <- confusionMatrix(as.factor(df_propub_2_yr_white$high_score),
+                                          as.factor(df_propub_2_yr_white$two_year_recid), positive="1" )
+
+#############################
+
+# Corrected two-year general recidivism dataset - 6216 total (all race groups)
+
+# Black
+
+# nrow(corrected_compas_two_year_black)
+
+# Confusion Matrix - Recidivism vs. Low/High COMPAS Score
+
+cont_table_Corrected_black <- table(corrected_compas_two_year_black$two_year_recid ,
+                                    corrected_compas_two_year_black$high_score)
+
+cont_table_Corrected_black_margin <- 
+  cbind(cont_table_Corrected_black,
+        round(rowSums(cont_table_Corrected_black)/sum(cont_table_Corrected_black), 2))
+
+kable(cont_table_Corrected_black_margin,  escape = F, 
+      caption = "Table 24: Blacks Corrected Two-Year Dataset Confusion Matrix: Recidivism vs. Low/High COMPAS Score", 
+      booktabs = T,
+      col.names = linebreak(c("Low","High"," "), align = "c")) %>%
+  kable_styling() %>%  
+  column_spec(2, border_left = T) %>%
+  column_spec(4, border_left = T) %>%
+  add_header_above(c("Actual \n two_year_recid" = 1, "Predicted \n COMPAS Score" = 2, " " = 1), line = FALSE) 
+
+confusn_mat_black_correct <- confusionMatrix(as.factor(corrected_compas_two_year_black$high_score),
+                                             as.factor(corrected_compas_two_year_black$two_year_recid), 
+                                             positive="1" )
+
+#############
+
+# White
+
+# nrow(corrected_compas_two_year_white)
+
+# Confusion Matrix - Recidivism vs. Low/High COMPAS Score
+
+cont_table_Corrected_white <- table(corrected_compas_two_year_white$two_year_recid ,
+                                    corrected_compas_two_year_white$high_score)
+
+cont_table_Corrected_white_margin <- 
+  cbind(cont_table_Corrected_white,
+        round(rowSums(cont_table_Corrected_white)/sum(cont_table_Corrected_white), 2))
+
+kable(cont_table_Corrected_white_margin,  escape = F, 
+      caption = "Table 25: Whites Corrected Two-Year Dataset Confusion Matrix: Recidivism vs. Low/High COMPAS Score", 
+      booktabs = T,
+      col.names = linebreak(c("Low","High"," "), align = "c")) %>%
+  kable_styling() %>%  
+  column_spec(2, border_left = T) %>%
+  column_spec(4, border_left = T) %>%
+  add_header_above(c("Actual \n two_year_recid" = 1, "Predicted \n COMPAS Score" = 2, " " = 1), line = FALSE) 
+
+confusn_mat_white_correct <- confusionMatrix(as.factor(corrected_compas_two_year_white$high_score),
+                                             as.factor(corrected_compas_two_year_white$two_year_recid), 
+                                             positive="1" )
+
+```
+
+## Correcting Recidivism Figures in Other Papers
+
+<!-- I try to replicate Figures as closely as possible to what they look like in the original publications. 
+Using the same color schemes for example. 
+Except for the following: 
+- Figure size or dimensions 
+- Axis labels, because I use a constant naming convention for axes in my paper for clarity
+- I add a *dashed line* for the *mean* recidivism rate 
+- Finally, the sample sub-setting may not be exactly the same as in the other papers in every case, but it should be similar -->
+
+<!-- X2 below is just temporary dataset name or 'tibble' which I use for getting data ready for Figures
+I overwrite X2 multiple times as I get data ready for different Figures -->
+
+``` {r, fig.height=3.5, fig.cap='Figure 10: Two-Year Recidivism Rate by COMPAS score by Race (replicating Corbett-Davies et al. 2017)'}
+
+# Davies-Goel - Figure 2 [@2017arXiv170108230C]
+# Recidivism Rate by Race by Score Decile
+#	(Also Flores et al Figure 1 is very similar, and has the same issue - [@Flores_et_al]) 
+
+#############################
+
+# ProPublica two-year general recidivism dataset (7214 total all race groups)
+
+X2 <- df_propub_2_yr_csv %>% select(decile_score, two_year_recid, race)
+X2 <- X2 %>% filter(race %in% (c("African-American","Caucasian")))
+
+tibble_propub <- X2 %>% group_by(race, decile_score) %>%
+  summarize(m=mean(two_year_recid),lo=lo95(two_year_recid),hi=hi95(two_year_recid)) 
+
+gg_davies_goel_race <- ggplot(tibble_propub, aes(x=decile_score, y=m, color = race)) +
+  geom_ribbon(data=tibble_propub[which(tibble_propub$race=="Caucasian"),], 
+              aes(ymin=lo, ymax=hi), fill = "grey85", colour = NA) +
+  geom_ribbon(data=tibble_propub[which(tibble_propub$race=="African-American"),], 
+              aes(ymin=lo, ymax=hi), fill = "grey78", colour = NA) +
+  geom_line() +
+  xlab('COMPAS decile score') + ylab('Two-year recidivism rate') +
+  ylim(0, 1) + xlim(1, 10) +
+  scale_x_continuous(breaks=seq(1,10,1)) + 
+  scale_colour_manual(name  ="Race",
+                      labels=c("African-American", "Caucasian"),
+                      values=c("African-American"="red", "Caucasian"="blue")) + 
+  theme(legend.position = c(0.4, 0.9)) +
+  theme(legend.title=element_blank()) +
+  theme(legend.background=element_blank()) + 
+  geom_hline(yintercept = mean(X2$two_year_recid), linetype = "dashed") +
+  labs(subtitle="ProPublica Two-Year Data") +
+  annotate("text", x=3, y=mean(X2$two_year_recid)+.1, 
+           label=paste("Mean =", round(mean(X2$two_year_recid),2)), colour="black", angle=0) 
+
+#############
+
+# Corrected two-year general recidivism dataset (6216 total all race groups)
+
+X2 <- corrected_compas_two_year %>% select(decile_score, two_year_recid, race)
+X2 <- X2 %>% filter(race %in% (c("African-American","Caucasian")))
+
+tibble_correct <- X2 %>% group_by(race, decile_score) %>%
+  summarize(m=mean(two_year_recid),lo=lo95(two_year_recid),hi=hi95(two_year_recid)) 
+
+gg_davies_goel_race_corr <- ggplot(tibble_correct, aes(x=decile_score, y=m, color = race)) +
+  geom_ribbon(data=tibble_correct[which(tibble_correct$race=="Caucasian"),], 
+              aes(ymin=lo, ymax=hi), fill = "grey85", colour = NA) +
+  geom_ribbon(data=tibble_correct[which(tibble_correct$race=="African-American"),], 
+              aes(ymin=lo, ymax=hi), fill = "grey78", colour = NA) +
+  geom_line() +
+  xlab('COMPAS decile score') + ylab('Two-year recidivism rate') +
+  ylim(0, 1) + xlim(1, 10) +
+  scale_x_continuous(breaks=seq(1,10,1)) + 
+  scale_colour_manual(name  ="Race",
+                      labels=c("African-American", "Caucasian"),
+                      values=c("African-American"="red", "Caucasian"="blue")) +
+  theme(legend.position = c(0.4, 0.9)) +
+  theme(legend.title=element_blank()) +
+  theme(legend.background=element_blank()) + 
+  geom_hline(yintercept = mean(X2$two_year_recid), linetype = "dashed") +
+  labs(subtitle="Corrected Two-Year Data") +
+  annotate("text", x=3, y=mean(X2$two_year_recid)+.1, 
+           label=paste("Mean =", round(mean(X2$two_year_recid),2)), colour="black", angle=0)
+
+# Combining both graphs
+
+davies_goel_plot_1 <- grid.arrange(gg_davies_goel_race, gg_davies_goel_race_corr, ncol = 2,
+                                   top = textGrob("Two-Year Recidivism Rate by COMPAS score decile by Race", 
+                                                  gp=gpar(fontsize=12, font=2)))
+
+```
+
+``` {r, fig.height=3.5, fig.cap='Figure 11: Two-Year Recidivism Rate by COMPAS score by Race (replicating Chouldechova 2016)'}
+
+# Chouldechova Figure 1 [@2016arXiv161007524C]
+# Recidivism Rate by Race by Score Decile
+# Essentially the same as the previous Figure by Davies-Goel, but here in bars instead of curves
+
+#############################
+
+# ProPublica two-year general recidivism dataset (7214 total all race groups)
+
+X2 <- df_propub_2_yr_csv %>% select(decile_score, two_year_recid, race)
+X2 <- X2 %>% filter(race %in% (c("African-American","Caucasian")))
+
+tibble_propub <- X2 %>% group_by(decile_score, race) %>%
+  summarize(m=mean(two_year_recid),lo=lo95(two_year_recid),hi=hi95(two_year_recid)) 
+
+Chouldechova <- ggplot(tibble_propub, aes(x=decile_score, y=m, fill = race)) +
+  geom_bar(stat='identity', position = position_dodge()) +
+  scale_fill_manual(name  ="Race",
+                    labels=c("African-American", "Caucasian"),
+                    values=c("African-American"="gray60", "Caucasian"="orange2")) +
+  xlab('COMPAS decile score') + ylab('Two-year recidivism rate') +
+  theme(legend.position = "top") +
+  theme(legend.title=element_blank()) +
+  theme(legend.position = c(0.4, 0.85)) +
+  theme(legend.background=element_blank()) + 
+  ylim(0,1) + 
+  scale_x_continuous(breaks=seq(1,10,1))  +
+  geom_errorbar(aes(ymin=lo, ymax=hi), width=.2,
+                position=position_dodge(.9)) +
+  geom_hline(yintercept = mean(X2$two_year_recid), linetype = "dashed") +
+  labs(subtitle="ProPublica Two-Year Data") +
+  annotate("text", x=3, y=mean(X2$two_year_recid)+.15, 
+           label=paste("Mean =", round(mean(X2$two_year_recid),2)), colour="black", angle=0) 
+
+#############
+
+# Corrected two-year general recidivism dataset (6216 total race groups)
+
+X2 <- corrected_compas_two_year %>% select(decile_score, two_year_recid, race)
+X2 <- X2 %>% filter(race %in% (c("African-American","Caucasian")))
+
+tibble_correct <- X2 %>% group_by(race, decile_score) %>%
+  summarize(m=mean(two_year_recid),lo=lo95(two_year_recid),hi=hi95(two_year_recid)) 
+
+Chouldechova_correct <- ggplot(tibble_correct, aes(x=decile_score, y=m, fill = race)) +
+  geom_bar(stat='identity', position = position_dodge()) +
+  scale_fill_manual(name  ="Race",
+                    labels=c("African-American", "Caucasian"),
+                    values=c("African-American"="gray60", "Caucasian"="orange2")) +
+  xlab('COMPAS decile score') + ylab('Two-year recidivism rate') +
+  theme(legend.position = "top") +
+  theme(legend.title=element_blank()) +
+  theme(legend.position = c(0.4, 0.85)) +
+  theme(legend.background=element_blank()) + 
+  ylim(0,1) +
+  scale_x_continuous(breaks=seq(1,10,1))  +
+  geom_errorbar(aes(ymin=lo, ymax=hi), width=.2,
+                position=position_dodge(.9)) +
+  geom_hline(yintercept = mean(X2$two_year_recid), linetype = "dashed") +
+  labs(subtitle="Corrected Two-Year Data") +
+  annotate("text", x=3, y=mean(X2$two_year_recid)+.15, 
+           label=paste("Mean =", round(mean(X2$two_year_recid),2)), colour="black", angle=0) 
+
+# Combining both graphs
+
+Chouldechova_plot <- grid.arrange(Chouldechova, Chouldechova_correct, ncol = 2,
+                                  top = textGrob("Two-Year Recidivism Rate by COMPAS score decile by Race", 
+                                                 gp=gpar(fontsize=12, font=2)))
+```
+
+``` {r}
+
+# Davies-Goel - [Figure 1] (different paper) [@2018arXiv180800023C]
+# [Recidivism Rate by Sex by Score Decile]
+# First, here I do a sample size Table of people by Sex
+# Since this is the first time we deal with the Sex variable
+
+#############################
+
+# ProPublica two-year general recidivism dataset - 7214 total 
+
+ProPub_sex <- addmargins(xtabs(~ sex, data=df_propub_2_yr_csv))
+
+row.names(ProPub_sex)[row.names(ProPub_sex)=="Sum"] <- "Total"
+
+# Corrected two-year general recidivism dataset - 6216 total 
+
+Corrected_sex <- addmargins(xtabs(~ sex, data=corrected_compas_two_year))
+
+row.names(Corrected_sex)[row.names(Corrected_sex)=="Sum"] <- "Total"
+
+# Both datasets
+
+combo_single_tab_sex <- cbind(ProPub_sex, Corrected_sex)
+
+colnames(combo_single_tab_sex)[colnames(combo_single_tab_sex)=="ProPub_sex"] <- "ProPublica"
+colnames(combo_single_tab_sex)[colnames(combo_single_tab_sex)=="Corrected_sex"] <- "Corrected"
+
+kable(combo_single_tab_sex, 
+      caption = 'Table 26: Sex - ProPublica and Corrected Two-Year Data', booktabs = TRUE) %>%
+  kable_styling() %>%  
+  row_spec(2, hline_after = T)
+
+```
+
+``` {r, fig.height=3.5, fig.cap='Figure 12: Two-Year Recidivism Rate by COMPAS score by Sex (replicating Corbett-Davies and Goel 2018)'}
+
+# Davies-Goel - Figure 1 [@2018arXiv180800023C] (...continued)
+# Recidivism Rate by Sex by Score Decile
+# Now replicate Figure
+
+#############################
+
+# ProPublica two-year general recidivism dataset - 7214 total 
+
+X2 <- df_propub_2_yr_csv %>% select(decile_score, two_year_recid, sex)
+
+tibble_propub <- X2 %>% group_by(sex, decile_score) %>%
+  summarize(m=mean(two_year_recid),lo=lo95(two_year_recid),hi=hi95(two_year_recid)) 
+
+gg_davies_goel_sex <- ggplot(tibble_propub, aes(x=decile_score, y=m, color = sex)) +
+  geom_line(aes(linetype=sex, color=sex))+
+  xlab('COMPAS decile score') + ylab('Two-year recidivism rate') +
+  ylim(0, 1) + xlim(1, 10) +
+  scale_x_continuous(breaks=seq(1,10,1)) + 
+  scale_linetype_manual(name  ="sex",
+                        labels=c("Female", "Male"),
+                        values=c("Female"="solid", "Male"="dotted")) +
+  scale_colour_manual(name  ="sex",
+                      labels=c("Female", "Male"),
+                      values=c("Female"="black", "Male"="black")) +
+  theme(legend.position = c(0.25, 0.85)) +
+  theme(legend.title=element_blank()) +
+  theme(legend.background=element_blank()) + 
+  geom_hline(yintercept = mean(X2$two_year_recid), linetype = "dashed") +
+  labs(subtitle="ProPublica Two-Year Data") +
+  annotate("text", x=3, y=mean(X2$two_year_recid)+.1, 
+           label=paste("Mean =", round(mean(X2$two_year_recid),2)), colour="black", angle=0) 
+
+#############
+
+# Corrected two-year general recidivism dataset - 6216 total
+
+X2 <- corrected_compas_two_year %>% select(decile_score, two_year_recid, sex)
+
+tibble_correct <- X2 %>% group_by(sex, decile_score) %>%
+  summarize(m=mean(two_year_recid),lo=lo95(two_year_recid),hi=hi95(two_year_recid)) 
+
+gg_davies_goel_sex_corr <- ggplot(tibble_correct, aes(x=decile_score, y=m, color = sex)) +
+  geom_line(aes(linetype=sex, color=sex))+
+  xlab('COMPAS decile score') + ylab('Two-year recidivism rate') +
+  ylim(0, 1) + xlim(1, 10) +
+  scale_x_continuous(breaks=seq(1,10,1)) + 
+  scale_linetype_manual(name  ="sex",
+                        labels=c("Female", "Male"),
+                        values=c("Female"="solid", "Male"="dotted")) +
+  scale_colour_manual(name  ="sex",
+                      labels=c("Female", "Male"),
+                      values=c("Female"="black", "Male"="black")) +
+  theme(legend.position = c(0.25, 0.85)) +
+  theme(legend.title=element_blank()) +
+  theme(legend.background=element_blank()) + 
+  geom_hline(yintercept = mean(X2$two_year_recid), linetype = "dashed") +
+  labs(subtitle="Corrected Two-Year Data") +
+  annotate("text", x=3, y=mean(X2$two_year_recid)+.1, 
+           label=paste("Mean =", round(mean(X2$two_year_recid),2)), colour="black", angle=0)
+
+# Combining both graphs
+
+davies_goel_plot_2 <- grid.arrange(gg_davies_goel_sex, gg_davies_goel_sex_corr, ncol = 2,
+                                   top = textGrob("Two-Year Recidivism Rate by COMPAS score decile by Sex", 
+                                                  gp=gpar(fontsize=12, font=2)))
+
+```
+
+``` {r, fig.height=3.5, fig.cap='Figure 13: COMPAS Score Decile Distribution by Two-Year Recidivism Status (replicating DistrictDataLabs)'}
+
+# Districtdatalabs (https://www.districtdatalabs.com/fairness-and-bias-in-algorithms)
+# website last accessed on August 11, 2019
+
+# COMPAS Score Decile Distribution by Two-Year Recidivism Status
+# [This is their fourth Figure (but they do not use numbering)]
+
+#############################
+
+# ProPublica two-year general recidivism dataset - 7214 total 
+
+X2 <- df_propub_2_yr_csv %>% select(decile_score, two_year_recid, race)
+
+X2 <- X2 %>% select(decile_score, two_year_recid) %>%
+  table %>% 
+  as.data.frame 
+
+dcdatdatalabs <- ggplot(X2, aes(x=decile_score, y=Freq, group=two_year_recid, color=two_year_recid)) +
+  geom_line() +
+  ylim(0,1300) +
+  labs(subtitle="ProPublica Two-Year Data") +
+  xlab('COMPAS decile score') + ylab('Person Count') +
+  theme(legend.position = c(0.77, 0.73)) +
+  theme(legend.background=element_blank()) +
+  geom_vline(xintercept = 5.34, linetype = "dashed") 
+
+#############
+
+# Corrected two-year general recidivism dataset - 6216 total
+
+X2 <- corrected_compas_two_year %>% select(decile_score, two_year_recid, race)
+
+X2 <- X2 %>% select(decile_score, two_year_recid) %>%
+  table %>% 
+  as.data.frame 
+
+correct_dclab <- ggplot(X2, aes(x=decile_score, y=Freq, group=two_year_recid, color=two_year_recid)) +
+  geom_line() +
+  ylim(0,1300) +
+  labs(subtitle="Corrected Two-Year Data") +
+  xlab('COMPAS decile score') + ylab('Person Count') +
+  theme(legend.position = c(0.5, 0.73)) +
+  theme(legend.background=element_blank()) +
+  geom_vline(xintercept = 6.9, linetype = "dashed") 
+
+# Combining both graphs
+
+dcdatalabs_plot_1 <- grid.arrange(dcdatdatalabs, correct_dclab, ncol = 2,
+                                  top = textGrob("COMPAS Score Decile Distribution by Two-Year Recidivism Status", 
+                                                 gp=gpar(fontsize=12, font=2)))
+
+```
+
+<!-- In the last Figure I added a vertical dashed line in my paper. This vertical line is where the two curves
+in that Figure cross. That is the score at which there begin to be more recidivists than non-recidivists. -->
+
+``` {r clearing-datasets}
+
+# This cleans out the workspace
+
+rm(list = ls())
+```
