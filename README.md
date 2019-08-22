@@ -66,21 +66,22 @@ website.
 
 <!-- This is a shorter version of the abstract in the arXiv paper <https://arxiv.org/abs/1906.04711>. -->
 
-I examine the **COMPAS recidivism risk score** and **criminal history**
-data collected by **ProPublica** in 2016 that fueled intense debate and
-research in the nascent field of *fair* machine learning or *algorithmic
-fairness*. My paper takes a closer look at the actual datasets put
-together by ProPublica. In particular, the **sub-datasets** built to
-study the likelihood of **recidivism within two years** of a defendant’s
-original COMPAS survey screening
-date.<!-- (typically administered the same day or one day after the arrest) -->
+I examine the **COMPAS recidivism risk score** and **criminal records**
+data collected by **ProPublica** in 2016. ProPublica’s article and data
+analysis fueled intense debate and research in the nascent field of
+*fair* machine learning or *algorithmic fairness*. My paper takes a
+closer look at the actual datasets put together by ProPublica. In
+particular, the **sub-datasets** built to study the likelihood of
+**recidivism within two years** of a defendant’s original COMPAS survey
+screening date. (This screening is typically performed the day of, or
+one day after, the arrest)
 
 I visualize these data by analyzing the distribution of defendants
 across COMPAS screening dates. Doing so, **I find** that **ProPublica
 made a substantial data processing error** when it created these
-datasets, **failing to implement a two-year sample cutoff rule for
-recidivists** in such datasets (whereas it implemented a two-year sample
-cutoff rule for non-recidivists).
+datasets. Namely, it **failed to implement a two-year window sample
+cutoff for recidivists** in such datasets (whereas it did implement such
+a sample cutoff for non-recidivists).
 
 I show this data processing error in the Figure below, which is the key
 Figure in my paper (**Figure
@@ -88,20 +89,21 @@ Figure in my paper (**Figure
 
 <img src="arXiv_ProPub_COMPAS_Revisited_files/figure-gfm/compas-screen-date-figures-by-recid-ProPub-2year-data-1.png" title="Figure 4: Persons by COMPAS Screen Date (7-day bins) by Recidivism Status - ProPublica Two-Year Dataset" alt="Figure 4: Persons by COMPAS Screen Date (7-day bins) by Recidivism Status - ProPublica Two-Year Dataset" style="display: block; margin: auto;" />
 
-*\[Note: There is also a visible drop in COMPAS screens or cases during
-two months in mid-2013 (for recidivists and non-recidivists alike). This
-is a separate issue, however, which seems to be present in the original
-dataset that ProPublica received from Broward County, FL. So this
-particular issue does not appear to be a data processing mistake by
-ProPublica, and I do not address this in my paper\]*
+*\[Note: There is also an unrelated, but very visible, drop in COMPAS
+screens or cases during two months in mid-2013 (for recidivists and
+non-recidivists alike). This is a separate issue, however, which seems
+to be present in the original dataset that ProPublica received from
+Broward County, FL. So this particular issue does not appear to be a
+data processing mistake by ProPublica, and I do not address this in my
+paper\]*
 
-As I show in my paper, the data processing mistake I identify **leads to
+As I show in my paper, the data processing error I identify **leads to
 recidivism rates that are biased upward by over 24%**. It also affects
 the positive and negative predictive values. On the other hand, the data
 processing error has little impact on some of the other key statistical
 measures, which are less susceptible to changes in the relative share of
-recidivists, such as the false positive and false negative rates, and
-the overall accuracy.
+recidivists. In particular, the accuracy, false positive rate, and false
+negative rate.
 
 -----
 
